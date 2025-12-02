@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Simple - Detector IA</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .container {
+            border: 2px solid #667eea;
+            padding: 20px;
+            border-radius: 10px;
+        }
+        input[type="file"] {
+            margin: 20px 0;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f0f0f0;
+            border-radius: 5px;
+        }
+        .error {
+            background: #ffcccc;
+            color: #cc0000;
+        }
+        .success {
+            background: #ccffcc;
+            color: #006600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test Simple - Detector de Imágenes IA</h1>
+        
+        <form id="testForm">
+            <input type="file" id="fileInput" accept="image/*" required>
+            <br>
+            <button type="submit">Analizar</button>
+        </form>
+        
+        <div id="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('testForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const resultDiv = document.getElementById('result');
+            const fileInput = document.getElementById('fileInput');
+            
+            if (!fileInput.files[0]) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = 'Por favor selecciona una imagen';
+                return;
+            }
+            
+            resultDiv.textContent = 'Analizando...';
+            resultDiv.className = '';
+            
+            const formData = new FormData();
+            formData.append('image', fileInput.files[0]);
+            
+            console.log('Enviando archivo:', fileInput.files[0].name);
+            
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                console.log('Response status:', response.status);
+                console.log('Response headers:', response.headers);
+                
+                const contentType = response.headers.get('content-type');
+                console.log('Content-Type:', contentType);
+                
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    console.error('Response no es JSON:', text.substring(0, 200));
+                    throw new Error('La respuesta del servidor no es JSON. Content-Type: ' + contentType);
+                }
+                
+                const data = await response.json();
+                console.log('Datos recibidos:', data);
+                
+                if (response.ok) {
+                    resultDiv.className = 'success';
+                    resultDiv.innerHTML = `
+                        <h3>✅ Análisis Exitoso</h3>
+                        <p><strong>Predicción:</strong> ${data.prediction}</p>
+                        <p><strong>Confianza:</strong> ${data.confidence}%</p>
+                        <p><strong>Score Laplaciano:</strong> ${data.laplacian_score}</p>
+                        <p><strong>Score FFT:</strong> ${data.fft_score}</p>
+                    `;
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.textContent = 'Error: ' + (data.error || 'Error desconocido');
+                }
+            } catch (error) {
+                console.error('Error completo:', error);
+                resultDiv.className = 'error';
+                resultDiv.textContent = 'Error: ' + error.message;
+            }
+        });
+    </script>
+</body>
+</html>

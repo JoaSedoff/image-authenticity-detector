@@ -1,0 +1,63 @@
+# ==================================
+# PDI Proyecto - AI Image Detector
+# ==================================
+
+# ========== LLM Context Files ==========
+# Documentación técnica para asistentes de IA (no para usuarios)
+docs/llm_context/
+
+# ========== Datos Privados/Generados ==========
+# Datasets de características extraídas
+dataset_features*.csv
+dataset_metrics.csv
+
+# Reportes de calibración
+calibration_report*.txt
+
+# Instrucciones personales
+coding_instructions.txt
+programa_proc_imagenes.txt
+
+# ========== Carpetas de Datos ==========
+# Imágenes del dataset (datos privados)
+Imagenes/
+
+# Archivos subidos temporalmente (mantener carpeta vacía)
+uploads/*
+!uploads/.gitkeep
+
+# ========== Python ==========
+# Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+venv/
+env/
+.env/
+.venv/
+
+# Distribución / packaging
+*.egg-info/
+dist/
+build/
+
+# ========== Jupyter Notebooks ==========
+# Checkpoints (no el notebook en sí)
+.ipynb_checkpoints/
+
+# ========== IDE / Editor ==========
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ========== OS ==========
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========== Archivos de configuración generados ==========
+suggested_config.json

@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Laboratorio de Análisis de Imágenes - PDI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>LABORATORIO DE ANÁLISIS</h1>
+            <p class="subtitle">Detección de Imágenes Generadas por IA</p>
+            <p class="description">Sistema de análisis mediante Procesamiento Digital de Imágenes clásico<br>Histogramas • Laplaciano • FFT 2D • ELA</p>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <h2>Cargar Imagen para Análisis</h2>
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="algorithm-selector">
+                        <label for="algorithmSelect">Algoritmo de Detección:</label>
+                        <select id="algorithmSelect" name="algorithm">
+                            <option value="ela" selected>ELA (Error Level Analysis) - 84.38% accuracy</option>
+                            <option value="laplacian">Laplaciano - 68.52% accuracy</option>
+                            <option value="combined">Combinado (Votación Ponderada)</option>
+                        </select>
+                        <p class="algorithm-desc" id="algorithmDesc">Análisis de niveles de error por recompresión JPEG</p>
+                    </div>
+                    <div class="file-input-wrapper">
+                        <input type="file" id="imageInput" name="image" accept="image/*" required>
+                        <label for="imageInput" class="file-label">
+                            <span id="fileName">Seleccionar archivo de imagen...</span>
+                        </label>
+                    </div>
+                    <button type="submit" class="btn-analyze">▶ Iniciar Análisis</button>
+                </form>
+            </div>
+
+            <div id="loadingSpinner" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Procesando imagen...</p>
+                <p class="loading-note">Las imágenes de alta resolución pueden tardar algunos segundos</p>
+            </div>
+
+            <div id="results" class="results" style="display: none;">
+                <div class="result-header">
+                    <h2>RESULTADOS DEL ANÁLISIS</h2>
+                </div>
+
+                <div class="preview-section">
+                    <div class="preview-card">
+                        <h3>Imagen Original</h3>
+                        <img id="previewImage" src="" alt="Vista previa">
+                        <p class="preview-desc">Imagen subida para análisis</p>
+                    </div>
+                </div>
+
+                <div class="prediction-card">
+                    <h3>Clasificación de la Imagen</h3>
+                    <div class="prediction-content">
+                        <div class="prediction-label" id="predictionLabel"></div>
+                        <div class="confidence">
+                            <span>Nivel de Confianza: </span>
+                            <span id="confidence"></span>
+                        </div>
+                        <div class="algorithm-used">
+                            <span>Algoritmo: </span>
+                            <span id="algorithmUsed"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="metrics-grid">
+                    <div class="metric-card" id="elaMetricCard" style="display: none;">
+                        <h4>SCORE ELA</h4>
+                        <div class="metric-value" id="elaScore"></div>
+                        <p class="metric-info">Media de error por recompresión JPEG</p>
+                    </div>
+                    <div class="metric-card">
+                        <h4>SCORE LAPLACIANO</h4>
+                        <div class="metric-value" id="laplacianScore"></div>
+                        <p class="metric-info">Detección de alta frecuencia y bordes</p>
+                    </div>
+                    <div class="metric-card">
+                        <h4>SCORE FFT</h4>
+                        <div class="metric-value" id="fftScore"></div>
+                        <p class="metric-info">Energía en altas frecuencias espectrales</p>
+                    </div>
+                    <div class="metric-card">
+                        <h4>DIMENSIONES</h4>
+                        <div class="metric-value" id="dimensions"></div>
+                        <p class="metric-info">Resolución de la imagen analizada</p>
+                    </div>
+                </div>
+
+                <div class="analysis-sections">
+                    <div class="analysis-card" id="elaCard" style="display: none;">
+                        <h3>Análisis ELA (Error Level Analysis)</h3>
+                        <img id="elaPlot" src="" alt="ELA">
+                        <p class="analysis-desc">Original | Mapa de Error | Mapa de Calor</p>
+                    </div>
+
+                    <div class="analysis-card">
+                        <h3>Histograma de Intensidades</h3>
+                        <img id="histogramPlot" src="" alt="Histograma">
+                        <p class="analysis-desc">Distribución de valores de píxel en la imagen</p>
+                    </div>
+
+                    <div class="analysis-card">
+                        <h3>Mapa Laplaciano</h3>
+                        <img id="laplacianPlot" src="" alt="Laplaciano">
+                        <p class="analysis-desc">Detección de bordes y contenido de alta frecuencia</p>
+                    </div>
+
+                    <div class="analysis-card">
+                        <h3>Espectro de Frecuencias</h3>
+                        <img id="fftPlot" src="" alt="FFT">
+                        <p class="analysis-desc">Transformada de Fourier 2D - Análisis espectral</p>
+                    </div>
+                </div>
+
+                <div class="interpretation">
+                    <h3>▪ INTERPRETACIÓN TÉCNICA</h3>
+                    <div id="interpretationText"></div>
+                </div>
+            </div>
+
+            <div id="errorMessage" class="error-message" style="display: none;"></div>
+        </main>
+
+        <footer>
+            <p>LABORATORIO DE PROCESAMIENTO DIGITAL DE IMÁGENES</p>
+            <p>Fundamentos del Procesamiento Digital de Imágenes – ICO 527</p>
+            <p>Análisis mediante técnicas clásicas de PDI</p>
+        </footer>
+    </div>
+
+    <script>
+        // Descripciones de algoritmos
+        const algorithmDescriptions = {
+            'ela': 'Análisis de niveles de error por recompresión JPEG (Unidad 3: Operaciones aritméticas)',
+            'laplacian': 'Análisis de alta frecuencia mediante filtro Laplaciano 3x3 (Unidad 3: Filtros de vecindad)',
+            'combined': 'Combinación ponderada de múltiples métricas para mayor robustez'
+        };
+
+        // Actualizar descripción cuando cambia el algoritmo
+        document.getElementById('algorithmSelect').addEventListener('change', function(e) {
+            document.getElementById('algorithmDesc').textContent = algorithmDescriptions[e.target.value] || '';
+        });
+
+        // Mostrar nombre del archivo seleccionado
+        document.getElementById('imageInput').addEventListener('change', function(e) {
+            const fileName = e.target.files[0]?.name || 'Seleccionar archivo de imagen...';
+            document.getElementById('fileName').textContent = fileName;
+        });
+
+        // Manejo del formulario
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            const fileInput = document.getElementById('imageInput');
+            const algorithmSelect = document.getElementById('algorithmSelect');
+            
+            if (!fileInput.files[0]) {
+                showError('Por favor selecciona una imagen');
+                return;
+            }
+            
+            formData.append('image', fileInput.files[0]);
+            formData.append('algorithm', algorithmSelect.value);
+            
+            // Mostrar spinner, ocultar resultados previos
+            document.getElementById('loadingSpinner').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('errorMessage').style.display = 'none';
+            
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayResults(data);
+                } else {
+                    showError(data.error || 'Error al analizar la imagen');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showError('Error de conexión: ' + error.message);
+            } finally {
+                document.getElementById('loadingSpinner').style.display = 'none';
+            }
+        });
+
+        function displayResults(data) {
+            // Mostrar vista previa de la imagen
+            const fileInput = document.getElementById('imageInput');
+            if (fileInput.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('previewImage').src = e.target.result;
+                };
+                reader.readAsDataURL(fileInput.files[0]);
+            }
+            
+            // Predicción
+            const predictionLabel = document.getElementById('predictionLabel');
+            predictionLabel.textContent = data.prediction;
+            predictionLabel.className = 'prediction-label ' + 
+                (data.prediction === 'REAL' ? 'real' : 'ai');
+            
+            document.getElementById('confidence').textContent = data.confidence + '%';
+            
+            // Algoritmo usado
+            const algoInfo = data.algorithm_info || {};
+            document.getElementById('algorithmUsed').textContent = algoInfo.name || data.algorithm_used;
+            
+            // Métricas
+            document.getElementById('laplacianScore').textContent = data.laplacian_score;
+            document.getElementById('fftScore').textContent = data.fft_score;
+            document.getElementById('dimensions').textContent = 
+                `${data.dimensions[0]} × ${data.dimensions[1]}`;
+            
+            // Métricas y visualizaciones ELA (si están disponibles)
+            const elaCard = document.getElementById('elaCard');
+            const elaMetricCard = document.getElementById('elaMetricCard');
+            
+            if (data.ela_plot) {
+                elaCard.style.display = 'block';
+                document.getElementById('elaPlot').src = data.ela_plot;
+                
+                if (data.ela_mean !== undefined) {
+                    elaMetricCard.style.display = 'block';
+                    document.getElementById('elaScore').textContent = data.ela_mean;
+                }
+            } else {
+                elaCard.style.display = 'none';
+                elaMetricCard.style.display = 'none';
+            }
+            
+            // Gráficos base
+            document.getElementById('histogramPlot').src = data.histogram_plot;
+            document.getElementById('laplacianPlot').src = data.laplacian_plot;
+            document.getElementById('fftPlot').src = data.fft_plot;
+            
+            // Interpretación
+            const interpretation = generateInterpretation(data);
+            document.getElementById('interpretationText').innerHTML = interpretation;
+            
+            // Mostrar resultados
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function generateInterpretation(data) {
+            let html = '<ul>';
+            const algo = data.algorithm_used || 'laplacian';
+            const algoName = data.algorithm_info?.name || algo.toUpperCase();
+            
+            html += '<li><strong>Algoritmo utilizado:</strong> ' + algoName + '</li>';
+            
+            if (algo === 'ela' && data.ela_mean !== undefined) {
+                if (data.prediction === 'REAL') {
+                    html += '<li><strong>Score ELA alto (' + data.ela_mean + ')</strong>: ';
+                    html += 'La imagen presenta niveles de error consistentes con una fotografía real que ha sido comprimida previamente.</li>';
+                    html += '<li>Las regiones muestran patrones de compresión uniformes, típico de imágenes capturadas por cámaras digitales.</li>';
+                } else {
+                    html += '<li><strong>Score ELA bajo (' + data.ela_mean + ')</strong>: ';
+                    html += 'La imagen presenta niveles de error inusualmente bajos o uniformes, característica de imágenes sintéticas.</li>';
+                    html += '<li>Las imágenes generadas por IA suelen no tener historial de compresión JPEG previo, resultando en patrones ELA distintos.</li>';
+                }
+            } else if (algo === 'laplacian') {
+                if (data.prediction === 'REAL') {
+                    html += '<li><strong>Score Laplaciano bajo (' + data.laplacian_score + ')</strong>: ';
+                    html += 'La imagen presenta menor contenido de alta frecuencia, característica típica de imágenes naturales.</li>';
+                } else {
+                    html += '<li><strong>Score Laplaciano elevado (' + data.laplacian_score + ')</strong>: ';
+                    html += 'Detección de artefactos característicos de síntesis por inteligencia artificial.</li>';
+                }
+            } else if (algo === 'combined') {
+                html += '<li><strong>Votación combinada:</strong> Se analizaron múltiples métricas para mayor robustez.</li>';
+                if (data.algorithm_details?.votes) {
+                    const votes = data.algorithm_details.votes;
+                    for (const [name, info] of Object.entries(votes)) {
+                        const voteText = info.vote === 1 ? 'IA' : 'REAL';
+                        html += '<li>' + name.toUpperCase() + ': vota ' + voteText + ' (confianza: ' + info.conf + '%)</li>';
+                    }
+                }
+            }
+            
+            html += '<li>El espectro FFT y el análisis Laplaciano complementan el diagnóstico.</li>';
+            html += '</ul>';
+            
+            const accuracy = data.algorithm_info?.accuracy;
+            if (accuracy) {
+                html += '<p class="note">◆ Algoritmo ' + algoName + ' con accuracy calibrada de ' + accuracy + '% sobre dataset de prueba.</p>';
+            }
+            html += '<p class="note">◆ Basado en técnicas de Procesamiento Digital de Imágenes clásico (Unidades 2, 3 y 4 del programa ICO 527)</p>';
+            
+            return html;
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            errorDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+</html>
