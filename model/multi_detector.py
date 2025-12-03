@@ -5,6 +5,7 @@ Sistema modular que permite cambiar entre diferentes algoritmos de detección:
 - Laplaciano (original)
 - ELA (Error Level Analysis)
 - Combinado (votación ponderada)
+- Auto (selección automática según formato de imagen)
 
 Cada algoritmo puede ser seleccionado dinámicamente desde la interfaz web.
 """
@@ -18,8 +19,60 @@ import base64
 from io import BytesIO
 import sys
 import os
+import imghdr
+from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 from enum import Enum
+
+
+# Formatos JPEG (ELA funciona mejor con estos)
+JPEG_EXTENSIONS = {'.jpg', '.jpeg', '.jpe', '.jfif'}
+JPEG_MIMETYPES = {'jpeg', 'jpg'}
+
+
+def detect_image_format(image_path: str) -> dict:
+    """
+    Detecta el formato de una imagen.
+    
+    Args:
+        image_path: Ruta al archivo de imagen
+        
+    Returns:
+        dict con keys:
+            - extension: extensión del archivo
+            - detected_type: tipo detectado por imghdr (contenido real)
+            - is_jpeg: True si es JPEG (por extensión o contenido)
+            - recommended_algorithm: algoritmo recomendado según formato
+    """
+    path = Path(image_path)
+    extension = path.suffix.lower()
+    
+    # Detectar tipo real por contenido (magic bytes)
+    try:
+        detected_type = imghdr.what(image_path)
+    except Exception:
+        detected_type = None
+    
+    # Determinar si es JPEG (por extensión O contenido)
+    is_jpeg_by_ext = extension in JPEG_EXTENSIONS
+    is_jpeg_by_content = detected_type in JPEG_MIMETYPES if detected_type else False
+    is_jpeg = is_jpeg_by_ext or is_jpeg_by_content
+    
+    # Recomendar algoritmo según formato
+    if is_jpeg:
+        recommended = "ela"  # ELA funciona mejor con JPEG (84.38% accuracy)
+        reason = "JPEG detectado - ELA es optimo para analizar artefactos de compresion"
+    else:
+        recommended = "laplacian"  # Laplacian es más general para otros formatos
+        reason = f"Formato {detected_type or extension} - Laplaciano es mas robusto para formatos sin compresion JPEG"
+    
+    return {
+        "extension": extension,
+        "detected_type": detected_type,
+        "is_jpeg": is_jpeg,
+        "recommended_algorithm": recommended,
+        "recommendation_reason": reason
+    }
 
 
 class DetectionAlgorithm(Enum):
@@ -27,27 +80,32 @@ class DetectionAlgorithm(Enum):
     LAPLACIAN = "laplacian"
     ELA = "ela"
     COMBINED = "combined"
+    AUTO = "auto"
 
 
 # Configuración de umbrales por algoritmo
+# Actualizado: 2025-12-02 - Calibración con dataset_features_combined.csv
 ALGORITHM_CONFIG = {
     "laplacian": {
         "name": "Laplaciano",
         "description": "Análisis de alta frecuencia mediante filtro Laplaciano 3x3",
         "feature": "laplacian_score",
-        "threshold": 4.5853,
+        "threshold": 4.6352,  # Calibrado sobre todas las imágenes
         "direction": "higher_is_fake",
-        "accuracy": 68.52,
-        "unit": "Unidad 3: Filtros de vecindad"
+        "accuracy": 68.52,  # Accuracy sobre todas (54 imgs)
+        "accuracy_png": 95.45,  # Accuracy solo PNG (22 imgs)
+        "unit": "Unidad 3: Filtros de vecindad",
+        "best_for": ["png", "webp", "bmp", "tiff"]
     },
     "ela": {
         "name": "ELA (Error Level Analysis)",
         "description": "Análisis de niveles de error por recompresión JPEG",
         "feature": "ela_mean",
-        "threshold": 0.1839,
+        "threshold": 0.1829,  # Calibrado sobre JPEG
         "direction": "lower_is_fake",
-        "accuracy": 84.38,
-        "unit": "Unidad 3: Operaciones aritméticas"
+        "accuracy": 84.38,  # Accuracy solo JPEG (32 imgs)
+        "unit": "Unidad 3: Operaciones aritméticas",
+        "best_for": ["jpeg", "jpg"]
     },
     "combined": {
         "name": "Combinado (Votación)",
@@ -56,7 +114,18 @@ ALGORITHM_CONFIG = {
         "threshold": 0.5,
         "direction": "higher_is_fake",
         "accuracy": None,  # Depende de calibración
-        "unit": "Múltiples unidades"
+        "unit": "Múltiples unidades",
+        "best_for": ["all"]
+    },
+    "auto": {
+        "name": "Automático (según formato)",
+        "description": "JPEG→ELA (84.38%), PNG→Laplaciano (95.45%)",
+        "feature": "auto_selected",
+        "threshold": None,  # Usa el threshold del algoritmo seleccionado
+        "direction": "auto",
+        "accuracy": 88.89,  # Accuracy combinada modo auto
+        "unit": "Selección inteligente",
+        "best_for": ["all"]
     }
 }
 
@@ -108,17 +177,20 @@ class MultiAlgorithmDetector:
                       algorithm: Optional[str] = None,
                       generate_plots: bool = True) -> Dict[str, Any]:
         """
-        Analiza una imagen con el algoritmo especificado.
+        Analiza una imagen ejecutando SIEMPRE ambos algoritmos (ELA y Laplaciano).
+        Retorna el resultado con mayor confianza como primario.
         
         Args:
             image_path: Ruta a la imagen
-            algorithm: Algoritmo a usar (None = usar actual)
+            algorithm: Ignorado - siempre ejecuta ambos algoritmos
             generate_plots: Generar visualizaciones
             
         Returns:
-            Diccionario con resultados del análisis
+            Diccionario con resultados primario y secundario del análisis
         """
-        algo = algorithm or self.current_algorithm
+        # Información de formato para discriminación y warnings
+        format_info = detect_image_format(image_path)
+        is_jpeg = format_info["is_jpeg"]
         
         # Cargar imagen
         img = self._load_image(image_path)
@@ -135,34 +207,91 @@ class MultiAlgorithmDetector:
         # Extraer métricas base (siempre se calculan para visualización)
         base_metrics = self._extract_base_metrics(img, img_gray, generate_plots)
         
-        # Extraer métricas ELA si es necesario
-        ela_metrics = {}
-        ela_plots = {}
-        if algo in ["ela", "combined"]:
-            ela_metrics, ela_plots = self._extract_ela_metrics(img, generate_plots)
+        # Extraer métricas ELA (siempre, pero con warning para PNG)
+        ela_metrics, ela_plots = self._extract_ela_metrics(img, generate_plots)
         
-        # Clasificar según algoritmo seleccionado
-        prediction, confidence, algo_details = self._classify(
-            algo, base_metrics, ela_metrics
+        # Clasificar con AMBOS algoritmos
+        lap_prediction, lap_confidence, lap_details = self._classify(
+            "laplacian", base_metrics, ela_metrics
+        )
+        ela_prediction, ela_confidence, ela_details = self._classify(
+            "ela", base_metrics, ela_metrics
         )
         
-        # Construir resultado
+        # Construir resultados de cada algoritmo
+        laplacian_result = {
+            "algorithm": "laplacian",
+            "algorithm_name": ALGORITHM_CONFIG["laplacian"]["name"],
+            "prediction": lap_prediction,
+            "confidence": lap_confidence,
+            "details": lap_details,
+            "score": base_metrics.get("laplacian_score", 0),
+            "threshold": ALGORITHM_CONFIG["laplacian"]["threshold"]
+        }
+        
+        ela_result = {
+            "algorithm": "ela",
+            "algorithm_name": ALGORITHM_CONFIG["ela"]["name"],
+            "prediction": ela_prediction,
+            "confidence": ela_confidence,
+            "details": ela_details,
+            "score": ela_metrics.get("ela_mean", 0),
+            "threshold": ALGORITHM_CONFIG["ela"]["threshold"],
+            "reliable": is_jpeg  # ELA solo es confiable para JPEG
+        }
+        
+        # Determinar resultado primario y secundario por confianza efectiva
+        # - Si es JPEG: ELA tiene prioridad (bonificación de 15% a su confianza efectiva)
+        # - Si no es JPEG: Penalizar ELA para que Laplaciano sea primario
+        if is_jpeg:
+            # Para JPEG, ELA es el algoritmo óptimo - darle ventaja
+            effective_ela_conf = ela_confidence * 1.15  # Bonificación 15%
+            effective_lap_conf = lap_confidence
+        else:
+            # Para PNG/otros, Laplaciano es más confiable
+            effective_ela_conf = ela_confidence * 0.5   # Penalización 50%
+            effective_lap_conf = lap_confidence
+        
+        if effective_ela_conf >= effective_lap_conf:
+            primary_result = ela_result
+            secondary_result = laplacian_result
+        else:
+            primary_result = laplacian_result
+            secondary_result = ela_result
+        
+        # Construir respuesta final
         result = {
-            "prediction": prediction,
-            "confidence": confidence,
-            "algorithm_used": algo,
-            "algorithm_info": ALGORITHM_CONFIG[algo],
-            "algorithm_details": algo_details,
+            "prediction": primary_result["prediction"],
+            "confidence": primary_result["confidence"],
+            "algorithm_used": primary_result["algorithm"],
+            "algorithm_info": ALGORITHM_CONFIG[primary_result["algorithm"]],
+            "algorithm_details": primary_result["details"],
+            
+            # Resultado primario detallado
+            "primary_result": primary_result,
+            
+            # Resultado secundario
+            "secondary_result": secondary_result,
+            
+            # Métricas generales
             "laplacian_score": round(base_metrics.get("laplacian_score", 0), 2),
             "fft_score": round(base_metrics.get("fft_score", 0), 2),
             "fft_metrics": base_metrics.get("fft_metrics", {}),
             "dimensions": img_rgb.shape,
+            
+            # Plots
             "histogram_plot": base_metrics.get("histogram_plot"),
             "laplacian_plot": base_metrics.get("laplacian_plot"),
             "fft_plot": base_metrics.get("fft_plot"),
+            
+            # Información de formato
+            "format_info": format_info,
+            
+            # Warning para ELA en PNG
+            "ela_warning": not is_jpeg
         }
         
-        # Agregar métricas y plots ELA si están disponibles
+        # Agregar métricas y plots ELA
         if ela_metrics:
             result["ela_metrics"] = ela_metrics
             result["ela_mean"] = round(ela_metrics.get("ela_mean", 0), 4)

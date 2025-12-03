@@ -1,180 +1,72 @@
 """
 Script de Calibración para Pipeline Forense V2
 
-Lee el dataset etiquetado, extrae métricas ELA y determina
-umbrales óptimos mediante búsqueda exhaustiva.
+Lee el CSV con características extraídas y determina
+umbrales óptimos para:
+- Laplaciano (todas las imágenes)
+- ELA (solo imágenes JPEG)
 
-Solo procesa imágenes JPEG para análisis ELA válido.
+Soporta modo automático (discriminación por formato).
 """
 
 import os
 import sys
 import csv
 import numpy as np
+import pandas as pd
 from typing import Dict, List, Tuple, Optional
 
 # Agregar path del proyecto
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from detection_pipelinev2.pipeline import ForensicPipeline
-from detection_pipelinev2.utils import load_dataset_labels, is_jpeg
 
-
-class ELACalibrator:
+class CombinedCalibrator:
     """
-    Calibrador para determinar umbrales óptimos de detección
-    basados en métricas ELA y otras características.
+    Calibrador que determina umbrales óptimos para múltiples algoritmos
+    usando datos pre-extraídos de un CSV.
     """
     
-    def __init__(self, dataset_path: str, data_file: str = "data.txt"):
+    def __init__(self, csv_path: str = "dataset_features_combined.csv"):
         """
         Args:
-            dataset_path: Ruta a carpeta con imágenes
-            data_file: Nombre del archivo de etiquetas
+            csv_path: Ruta al CSV con características extraídas
         """
-        self.dataset_path = dataset_path
-        self.data_file = os.path.join(dataset_path, data_file)
-        self.pipeline = ForensicPipeline(ela_quality=90)
-        self.features_data = []
-    
-    def extract_features(self, jpeg_only: bool = True, verbose: bool = True):
-        """
-        Extrae características de todas las imágenes etiquetadas.
+        self.csv_path = csv_path
+        self.df = None
+        self.df_jpeg = None
+        self.df_png = None
         
-        Args:
-            jpeg_only: Solo procesar imágenes JPEG
-            verbose: Mostrar progreso
-        """
-        # Cargar etiquetas
-        labels = load_dataset_labels(self.data_file)
+    def load_data(self):
+        """Carga datos del CSV."""
+        if not os.path.exists(self.csv_path):
+            print(f"ERROR: No se encontró {self.csv_path}")
+            return False
         
-        if not labels:
-            print(f"Error: No se encontraron etiquetas en {self.data_file}")
-            return
+        self.df = pd.read_csv(self.csv_path)
         
-        print(f"Etiquetas cargadas: {len(labels)} imágenes")
+        # Separar por formato
+        self.df_jpeg = self.df[self.df['is_jpeg'] == True].copy()
+        self.df_png = self.df[self.df['is_jpeg'] == False].copy()
         
-        # Filtrar solo JPEG si se requiere
-        if jpeg_only:
-            labels = {k: v for k, v in labels.items() if is_jpeg(k)}
-            print(f"Imágenes JPEG: {len(labels)}")
+        print(f"Datos cargados: {len(self.df)} imágenes")
+        print(f"  - JPEG: {len(self.df_jpeg)} (Real: {len(self.df_jpeg[self.df_jpeg['label']==0])}, IA: {len(self.df_jpeg[self.df_jpeg['label']==1])})")
+        print(f"  - PNG:  {len(self.df_png)} (Real: {len(self.df_png[self.df_png['label']==0])}, IA: {len(self.df_png[self.df_png['label']==1])})")
         
-        total = len(labels)
-        processed = 0
-        errors = 0
-        
-        for filename, label in labels.items():
-            image_path = os.path.join(self.dataset_path, filename)
-            
-            if not os.path.exists(image_path):
-                if verbose:
-                    print(f"  [!] No encontrado: {filename}")
-                errors += 1
-                continue
-            
-            if verbose:
-                print(f"  [{processed+1}/{total}] Procesando: {filename}...", end="\r")
-            
-            # Extraer características (solo ELA para velocidad)
-            features = self.pipeline.extract_features_for_calibration(image_path, include_legacy=False)
-            
-            if features:
-                features["filename"] = filename
-                features["label"] = label  # 0=real, 1=IA
-                self.features_data.append(features)
-                processed += 1
-            else:
-                errors += 1
-        
-        print(f"\nExtracción completada: {processed} procesadas, {errors} errores")
-    
-    def find_optimal_thresholds(self) -> Dict[str, Dict]:
-        """
-        Encuentra umbrales óptimos para cada métrica.
-        
-        Usa búsqueda exhaustiva para maximizar accuracy.
-        
-        Returns:
-            Diccionario con mejores umbrales por métrica
-        """
-        if not self.features_data:
-            print("Error: No hay datos de características. Ejecutar extract_features() primero.")
-            return {}
-        
-        # Obtener lista de métricas disponibles
-        sample = self.features_data[0]
-        metric_keys = [k for k in sample.keys() if k not in ["filename", "label"]]
-        
-        print(f"\nAnalizando {len(metric_keys)} métricas...")
-        print("-" * 60)
-        
-        results = {}
-        best_overall = {"metric": None, "accuracy": 0, "threshold": 0, "direction": None}
-        
-        for metric_key in metric_keys:
-            # Extraer valores y etiquetas
-            values = []
-            labels = []
-            
-            for data in self.features_data:
-                val = data.get(metric_key)
-                if val is not None and not np.isnan(val):
-                    values.append(val)
-                    labels.append(data["label"])
-            
-            if len(values) < 5:
-                continue
-            
-            values = np.array(values)
-            labels = np.array(labels)
-            
-            # Buscar umbral óptimo
-            best_thresh, best_acc, best_dir = self._search_threshold(values, labels)
-            
-            results[metric_key] = {
-                "threshold": best_thresh,
-                "accuracy": best_acc,
-                "direction": best_dir,
-                "mean_real": float(np.mean(values[labels == 0])) if np.sum(labels == 0) > 0 else 0,
-                "mean_ia": float(np.mean(values[labels == 1])) if np.sum(labels == 1) > 0 else 0,
-                "std_real": float(np.std(values[labels == 0])) if np.sum(labels == 0) > 0 else 0,
-                "std_ia": float(np.std(values[labels == 1])) if np.sum(labels == 1) > 0 else 0
-            }
-            
-            # Actualizar mejor global
-            if best_acc > best_overall["accuracy"]:
-                best_overall = {
-                    "metric": metric_key,
-                    "accuracy": best_acc,
-                    "threshold": best_thresh,
-                    "direction": best_dir
-                }
-            
-            print(f"{metric_key:30s} | Acc: {best_acc*100:5.1f}% | Thresh: {best_thresh:8.4f} | {best_dir}")
-        
-        print("-" * 60)
-        print(f"\n*** MEJOR MÉTRICA: {best_overall['metric']} ***")
-        print(f"    Accuracy: {best_overall['accuracy']*100:.2f}%")
-        print(f"    Umbral: {best_overall['threshold']:.4f}")
-        print(f"    Dirección: {best_overall['direction']}")
-        
-        results["_best"] = best_overall
-        
-        return results
+        return True
     
     def _search_threshold(self, values: np.ndarray, 
-                           labels: np.ndarray) -> Tuple[float, float, str]:
+                          labels: np.ndarray) -> Tuple[float, float, str]:
         """
         Búsqueda exhaustiva del mejor umbral.
-        
-        Args:
-            values: Array de valores de la métrica
-            labels: Array de etiquetas (0=real, 1=IA)
-            
-        Returns:
-            (mejor_umbral, mejor_accuracy, dirección)
         """
-        # Generar candidatos de umbral
+        # Filtrar NaN
+        mask = ~np.isnan(values)
+        values = values[mask]
+        labels = labels[mask]
+        
+        if len(values) < 5:
+            return 0.0, 0.0, "higher_is_fake"
+        
         min_val, max_val = np.min(values), np.max(values)
         thresholds = np.linspace(min_val, max_val, 200)
         
@@ -183,7 +75,7 @@ class ELACalibrator:
         best_dir = "higher_is_fake"
         
         for thresh in thresholds:
-            # Probar: higher_is_fake
+            # higher_is_fake
             preds_high = (values > thresh).astype(int)
             acc_high = np.mean(preds_high == labels)
             
@@ -192,7 +84,7 @@ class ELACalibrator:
                 best_thresh = thresh
                 best_dir = "higher_is_fake"
             
-            # Probar: lower_is_fake
+            # lower_is_fake
             preds_low = (values < thresh).astype(int)
             acc_low = np.mean(preds_low == labels)
             
@@ -203,124 +95,297 @@ class ELACalibrator:
         
         return float(best_thresh), float(best_acc), best_dir
     
-    def save_features_csv(self, output_path: str = "dataset_features_v2.csv"):
+    def calibrate_laplacian(self, data: pd.DataFrame = None, name: str = "todas") -> Dict:
         """
-        Guarda características extraídas en CSV.
+        Calibra umbral para Laplaciano.
         
         Args:
-            output_path: Ruta del archivo CSV de salida
+            data: DataFrame a usar (default: todas las imágenes)
+            name: Nombre descriptivo del conjunto
         """
-        if not self.features_data:
-            print("Error: No hay datos para guardar.")
-            return
+        if data is None:
+            data = self.df
         
-        # Obtener todas las claves
-        all_keys = set()
-        for data in self.features_data:
-            all_keys.update(data.keys())
+        values = data['laplacian_mean'].values
+        labels = data['label'].values
         
-        # Ordenar: filename, label primero, luego alfabético
-        ordered_keys = ["filename", "label"]
-        ordered_keys.extend(sorted([k for k in all_keys if k not in ordered_keys]))
+        thresh, acc, direction = self._search_threshold(values, labels)
         
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=ordered_keys)
-            writer.writeheader()
-            writer.writerows(self.features_data)
+        result = {
+            "metric": "laplacian_mean",
+            "threshold": thresh,
+            "accuracy": acc,
+            "direction": direction,
+            "n_samples": len(data),
+            "mean_real": float(data[data['label']==0]['laplacian_mean'].mean()),
+            "mean_ia": float(data[data['label']==1]['laplacian_mean'].mean()),
+            "std_real": float(data[data['label']==0]['laplacian_mean'].std()),
+            "std_ia": float(data[data['label']==1]['laplacian_mean'].std()),
+        }
         
-        print(f"Características guardadas en: {output_path}")
+        print(f"\n--- LAPLACIANO ({name}) ---")
+        print(f"  Samples: {result['n_samples']}")
+        print(f"  Threshold: {result['threshold']:.4f}")
+        print(f"  Accuracy: {result['accuracy']*100:.2f}%")
+        print(f"  Direction: {result['direction']}")
+        print(f"  Mean Real: {result['mean_real']:.4f} (±{result['std_real']:.4f})")
+        print(f"  Mean IA: {result['mean_ia']:.4f} (±{result['std_ia']:.4f})")
+        
+        return result
     
-    def generate_report(self, results: Dict, output_path: str = "calibration_report.txt"):
+    def calibrate_ela(self) -> Dict:
         """
-        Genera reporte de calibración en texto.
+        Calibra umbral para ELA (solo JPEG).
         """
-        lines = []
-        lines.append("=" * 70)
-        lines.append("REPORTE DE CALIBRACIÓN - PIPELINE FORENSE V2 (ELA)")
-        lines.append("=" * 70)
-        lines.append(f"\nTotal de imágenes analizadas: {len(self.features_data)}")
+        data = self.df_jpeg
         
-        n_real = sum(1 for d in self.features_data if d["label"] == 0)
-        n_ia = sum(1 for d in self.features_data if d["label"] == 1)
-        lines.append(f"  - Reales: {n_real}")
-        lines.append(f"  - IA: {n_ia}")
+        if len(data) < 5:
+            print("\n--- ELA (JPEG) ---")
+            print("  ERROR: No hay suficientes imágenes JPEG para calibrar")
+            return {}
         
-        lines.append("\n" + "-" * 70)
-        lines.append("RESULTADOS POR MÉTRICA")
-        lines.append("-" * 70)
+        values = data['ela_mean'].values
+        labels = data['label'].values
         
-        # Ordenar por accuracy
-        sorted_metrics = sorted(
-            [(k, v) for k, v in results.items() if k != "_best"],
-            key=lambda x: x[1]["accuracy"],
-            reverse=True
+        thresh, acc, direction = self._search_threshold(values, labels)
+        
+        result = {
+            "metric": "ela_mean",
+            "threshold": thresh,
+            "accuracy": acc,
+            "direction": direction,
+            "n_samples": len(data),
+            "mean_real": float(data[data['label']==0]['ela_mean'].mean()),
+            "mean_ia": float(data[data['label']==1]['ela_mean'].mean()),
+            "std_real": float(data[data['label']==0]['ela_mean'].std()),
+            "std_ia": float(data[data['label']==1]['ela_mean'].std()),
+        }
+        
+        print(f"\n--- ELA (solo JPEG) ---")
+        print(f"  Samples: {result['n_samples']}")
+        print(f"  Threshold: {result['threshold']:.4f}")
+        print(f"  Accuracy: {result['accuracy']*100:.2f}%")
+        print(f"  Direction: {result['direction']}")
+        print(f"  Mean Real: {result['mean_real']:.4f} (±{result['std_real']:.4f})")
+        print(f"  Mean IA: {result['mean_ia']:.4f} (±{result['std_ia']:.4f})")
+        
+        return result
+    
+    def calibrate_auto_mode(self) -> Dict:
+        """
+        Calcula accuracy del modo automático:
+        - JPEG -> ELA
+        - PNG -> Laplaciano
+        """
+        # Calibrar ELA para JPEG
+        ela_result = self.calibrate_ela()
+        
+        # Calibrar Laplaciano para PNG
+        lap_png_result = self.calibrate_laplacian(self.df_png, "solo PNG")
+        
+        # Calibrar Laplaciano para todas (referencia)
+        lap_all_result = self.calibrate_laplacian(self.df, "todas")
+        
+        # Calcular accuracy combinada del modo AUTO
+        correct = 0
+        total = 0
+        
+        # JPEG con ELA
+        if ela_result:
+            for _, row in self.df_jpeg.iterrows():
+                val = row['ela_mean']
+                label = row['label']
+                if pd.isna(val):
+                    continue
+                
+                if ela_result['direction'] == 'lower_is_fake':
+                    pred = 1 if val < ela_result['threshold'] else 0
+                else:
+                    pred = 1 if val > ela_result['threshold'] else 0
+                
+                if pred == label:
+                    correct += 1
+                total += 1
+        
+        # PNG con Laplaciano
+        if lap_png_result:
+            for _, row in self.df_png.iterrows():
+                val = row['laplacian_mean']
+                label = row['label']
+                
+                if lap_png_result['direction'] == 'higher_is_fake':
+                    pred = 1 if val > lap_png_result['threshold'] else 0
+                else:
+                    pred = 1 if val < lap_png_result['threshold'] else 0
+                
+                if pred == label:
+                    correct += 1
+                total += 1
+        
+        auto_accuracy = correct / total if total > 0 else 0
+        
+        print(f"\n{'='*60}")
+        print("MODO AUTOMÁTICO (discriminación por formato)")
+        print(f"{'='*60}")
+        print(f"  JPEG ({len(self.df_jpeg)} imgs) -> ELA: {ela_result.get('accuracy', 0)*100:.2f}%")
+        print(f"  PNG  ({len(self.df_png)} imgs) -> Laplaciano: {lap_png_result.get('accuracy', 0)*100:.2f}%")
+        print(f"\n  *** ACCURACY COMBINADA: {auto_accuracy*100:.2f}% ***")
+        
+        return {
+            "ela": ela_result,
+            "laplacian_png": lap_png_result,
+            "laplacian_all": lap_all_result,
+            "auto_accuracy": auto_accuracy,
+            "total_samples": total
+        }
+    
+    def generate_config_update(self, results: Dict) -> str:
+        """
+        Genera código Python para actualizar ALGORITHM_CONFIG en multi_detector.py
+        """
+        ela = results.get('ela', {})
+        lap_png = results.get('laplacian_png', {})
+        lap_all = results.get('laplacian_all', {})
+        
+        code = '''
+# === CONFIGURACIÓN ACTUALIZADA (generada por calibrate.py) ===
+# Fecha: {date}
+# Accuracy modo AUTO: {auto_acc:.2f}%
+
+ALGORITHM_CONFIG = {{
+    "laplacian": {{
+        "name": "Laplaciano",
+        "description": "Análisis de alta frecuencia mediante filtro Laplaciano 3x3",
+        "feature": "laplacian_score",
+        "threshold": {lap_thresh:.4f},
+        "direction": "{lap_dir}",
+        "accuracy": {lap_acc:.2f},
+        "unit": "Unidad 3: Filtros de vecindad",
+        "best_for": ["png", "webp", "bmp", "tiff"]
+    }},
+    "ela": {{
+        "name": "ELA (Error Level Analysis)",
+        "description": "Análisis de niveles de error por recompresión JPEG",
+        "feature": "ela_mean",
+        "threshold": {ela_thresh:.4f},
+        "direction": "{ela_dir}",
+        "accuracy": {ela_acc:.2f},
+        "unit": "Unidad 3: Operaciones aritméticas",
+        "best_for": ["jpeg", "jpg"]
+    }},
+    ...
+}}
+'''.format(
+            date=pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+            auto_acc=results.get('auto_accuracy', 0) * 100,
+            lap_thresh=lap_all.get('threshold', 4.5853),
+            lap_dir=lap_all.get('direction', 'higher_is_fake'),
+            lap_acc=lap_all.get('accuracy', 0) * 100,
+            ela_thresh=ela.get('threshold', 0.1839),
+            ela_dir=ela.get('direction', 'lower_is_fake'),
+            ela_acc=ela.get('accuracy', 0) * 100,
         )
         
-        for metric, data in sorted_metrics:
-            lines.append(f"\n{metric}:")
-            lines.append(f"  Accuracy: {data['accuracy']*100:.2f}%")
-            lines.append(f"  Umbral: {data['threshold']:.4f}")
-            lines.append(f"  Dirección: {data['direction']}")
-            lines.append(f"  Media Real: {data['mean_real']:.4f} (±{data['std_real']:.4f})")
-            lines.append(f"  Media IA: {data['mean_ia']:.4f} (±{data['std_ia']:.4f})")
+        return code
+    
+    def save_report(self, results: Dict, output_path: str = "calibration_report_combined.txt"):
+        """Guarda reporte de calibración."""
+        lines = []
+        lines.append("=" * 70)
+        lines.append("REPORTE DE CALIBRACIÓN COMBINADA - LAPLACIANO + ELA")
+        lines.append("=" * 70)
+        lines.append(f"\nFecha: {pd.Timestamp.now()}")
+        lines.append(f"Dataset: {self.csv_path}")
+        lines.append(f"Total imágenes: {len(self.df)}")
+        lines.append(f"  - JPEG: {len(self.df_jpeg)}")
+        lines.append(f"  - PNG: {len(self.df_png)}")
         
-        if "_best" in results:
-            best = results["_best"]
-            lines.append("\n" + "=" * 70)
-            lines.append("CONFIGURACIÓN ÓPTIMA RECOMENDADA")
-            lines.append("=" * 70)
-            lines.append(f"Métrica: {best['metric']}")
-            lines.append(f"Umbral: {best['threshold']:.4f}")
-            lines.append(f"Dirección: {best['direction']}")
-            lines.append(f"Accuracy esperada: {best['accuracy']*100:.2f}%")
+        lines.append("\n" + "-" * 70)
+        lines.append("RESULTADOS POR ALGORITMO")
+        lines.append("-" * 70)
         
-        report_text = "\n".join(lines)
+        # ELA
+        ela = results.get('ela', {})
+        if ela:
+            lines.append(f"\nELA (solo JPEG - {ela.get('n_samples', 0)} imgs):")
+            lines.append(f"  Accuracy: {ela.get('accuracy', 0)*100:.2f}%")
+            lines.append(f"  Threshold: {ela.get('threshold', 0):.4f}")
+            lines.append(f"  Direction: {ela.get('direction', '')}")
+            lines.append(f"  Mean Real: {ela.get('mean_real', 0):.4f}")
+            lines.append(f"  Mean IA: {ela.get('mean_ia', 0):.4f}")
+        
+        # Laplaciano PNG
+        lap_png = results.get('laplacian_png', {})
+        if lap_png:
+            lines.append(f"\nLAPLACIANO (solo PNG - {lap_png.get('n_samples', 0)} imgs):")
+            lines.append(f"  Accuracy: {lap_png.get('accuracy', 0)*100:.2f}%")
+            lines.append(f"  Threshold: {lap_png.get('threshold', 0):.4f}")
+            lines.append(f"  Direction: {lap_png.get('direction', '')}")
+        
+        # Laplaciano todas
+        lap_all = results.get('laplacian_all', {})
+        if lap_all:
+            lines.append(f"\nLAPLACIANO (todas - {lap_all.get('n_samples', 0)} imgs):")
+            lines.append(f"  Accuracy: {lap_all.get('accuracy', 0)*100:.2f}%")
+            lines.append(f"  Threshold: {lap_all.get('threshold', 0):.4f}")
+            lines.append(f"  Direction: {lap_all.get('direction', '')}")
+        
+        lines.append("\n" + "=" * 70)
+        lines.append("MODO AUTOMÁTICO (RECOMENDADO)")
+        lines.append("=" * 70)
+        lines.append(f"JPEG -> ELA | PNG -> Laplaciano")
+        lines.append(f"*** ACCURACY COMBINADA: {results.get('auto_accuracy', 0)*100:.2f}% ***")
+        
+        lines.append("\n" + "-" * 70)
+        lines.append("CÓDIGO PARA ACTUALIZAR multi_detector.py:")
+        lines.append("-" * 70)
+        lines.append(self.generate_config_update(results))
+        
+        report = "\n".join(lines)
         
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(report_text)
+            f.write(report)
         
         print(f"\nReporte guardado en: {output_path}")
-        print(report_text)
+        return report
 
 
 def main():
-    """Ejecutar calibración con dataset por defecto."""
-    # Ruta al dataset
-    dataset_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "Imagenes", "DeteccionIA"
-    )
+    """Ejecutar calibración combinada."""
+    print("=" * 60)
+    print("CALIBRACIÓN COMBINADA - LAPLACIANO + ELA")
+    print("=" * 60)
     
-    if not os.path.exists(dataset_path):
-        print(f"Error: No se encontró el dataset en {dataset_path}")
+    # Buscar CSV en directorio actual o raíz del proyecto
+    csv_paths = [
+        "dataset_features_combined.csv",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset_features_combined.csv")
+    ]
+    
+    csv_path = None
+    for path in csv_paths:
+        if os.path.exists(path):
+            csv_path = path
+            break
+    
+    if not csv_path:
+        print("ERROR: No se encontró dataset_features_combined.csv")
+        print("Ejecuta primero: python scripts/characteristic_extraction.py")
         return
     
-    print("=" * 60)
-    print("CALIBRACIÓN PIPELINE FORENSE V2 - ANÁLISIS ELA")
-    print("=" * 60)
-    print(f"Dataset: {dataset_path}")
-    print(f"Modo: Solo imágenes JPEG\n")
+    print(f"CSV: {csv_path}\n")
     
-    # Inicializar calibrador
-    calibrator = ELACalibrator(dataset_path)
+    # Calibrar
+    calibrator = CombinedCalibrator(csv_path)
     
-    # Extraer características
-    print("Extrayendo características ELA...")
-    calibrator.extract_features(jpeg_only=True, verbose=True)
-    
-    if not calibrator.features_data:
-        print("No se extrajeron características. Verifica el dataset.")
+    if not calibrator.load_data():
         return
     
-    # Guardar CSV
-    calibrator.save_features_csv("dataset_features_ela.csv")
+    results = calibrator.calibrate_auto_mode()
     
-    # Buscar umbrales óptimos
-    print("\nBuscando umbrales óptimos...")
-    results = calibrator.find_optimal_thresholds()
-    
-    # Generar reporte
-    calibrator.generate_report(results, "calibration_report_ela.txt")
+    # Guardar reporte
+    report = calibrator.save_report(results)
+    print("\n" + report)
 
 
 if __name__ == "__main__":

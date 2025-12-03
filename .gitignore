@@ -17,7 +17,7 @@ calibration_report*.txt
 # Instrucciones personales
 coding_instructions.txt
 programa_proc_imagenes.txt
-
+eval_output.txt
 # ========== Carpetas de Datos ==========
 # Imágenes del dataset (datos privados)
 Imagenes/

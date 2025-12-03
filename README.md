@@ -42,13 +42,13 @@ Combina los clasificadores ELA y Laplaciano mediante votación ponderada.
 
 ## Técnicas de PDI Utilizadas
 
-| Técnica | Unidad | Aplicación |
-|---------|--------|------------|
-| Análisis de histogramas | 2 | Distribución de intensidades |
-| Operaciones aritméticas | 3 | Diferencia absoluta (ELA) |
-| Filtro Laplaciano | 3 | Detección de bordes y alta frecuencia |
-| FFT 2D | 4 | Análisis espectral |
-| Extracción de regiones | 4 | Análisis por bloques 8×8 |
+| Técnica | Aplicación |
+|---------|------------|
+| Análisis de histogramas | Distribución de intensidades |
+| Operaciones aritméticas | Diferencia absoluta (ELA) |
+| Filtro Laplaciano | Detección de bordes y alta frecuencia |
+| FFT 2D | Análisis espectral |
+| Extracción de regiones | Análisis por bloques 8×8 |
 
 ---
 

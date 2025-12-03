@@ -21,11 +21,41 @@
                     <div class="algorithm-selector">
                         <label for="algorithmSelect">Algoritmo de Detección:</label>
                         <select id="algorithmSelect" name="algorithm">
-                            <option value="ela" selected>ELA (Error Level Analysis) - 84.38% accuracy</option>
-                            <option value="laplacian">Laplaciano - 68.52% accuracy</option>
-                            <option value="combined">Combinado (Votación Ponderada)</option>
+                            <option value="auto" selected>Automático (según formato)</option>
+                            <option value="ela">ELA (Error Level Analysis)</option>
+                            <option value="laplacian">Laplaciano</option>
                         </select>
-                        <p class="algorithm-desc" id="algorithmDesc">Análisis de niveles de error por recompresión JPEG</p>
+                        <p class="algorithm-desc" id="algorithmDesc">Selección automática: JPEG utiliza ELA, otros formatos utilizan Laplaciano</p>
+                        <details class="metrics-section">
+                            <summary>Métricas de los algoritmos</summary>
+                            <table class="metrics-table">
+                                <thead>
+                                    <tr>
+                                        <th>Algoritmo</th>
+                                        <th>Accuracy</th>
+                                        <th>Formato óptimo</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>ELA</td>
+                                        <td>84.38%</td>
+                                        <td>JPEG</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Laplaciano</td>
+                                        <td>95.45%</td>
+                                        <td>PNG</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Automático</td>
+                                        <td>88.89%</td>
+                                        <td>Todos</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <p class="metrics-note">Accuracy calibrada sobre dataset de 54 imágenes (32 JPEG, 22 PNG)</p>
+                        </details>
                     </div>
                     <div class="file-input-wrapper">
                         <input type="file" id="imageInput" name="image" accept="image/*" required>
@@ -33,7 +63,11 @@
                             <span id="fileName">Seleccionar archivo de imagen...</span>
                         </label>
                     </div>
-                    <button type="submit" class="btn-analyze">▶ Iniciar Análisis</button>
+                    <div id="imagePreviewContainer" class="image-preview-container" style="display: none;">
+                        <p class="preview-title">Vista previa:</p>
+                        <img id="imagePreview" src="" alt="Vista previa" class="image-preview">
+                    </div>
+                    <button type="submit" class="btn-analyze">Iniciar Análisis</button>
                 </form>
             </div>
 
@@ -57,7 +91,7 @@
                 </div>
 
                 <div class="prediction-card">
-                    <h3>Clasificación de la Imagen</h3>
+                    <h3>Resultado Principal</h3>
                     <div class="prediction-content">
                         <div class="prediction-label" id="predictionLabel"></div>
                         <div class="confidence">
@@ -68,6 +102,23 @@
                             <span>Algoritmo: </span>
                             <span id="algorithmUsed"></span>
                         </div>
+                        <div class="format-info" id="formatInfo" style="display: none;">
+                            <span>Formato detectado: </span>
+                            <span id="detectedFormat"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="secondary-result" id="secondaryResult">
+                    <h4>Resultado Secundario</h4>
+                    <div class="secondary-prediction" id="secondaryPrediction"></div>
+                    <div class="secondary-info">
+                        <span>Confianza: <strong id="secondaryConfidence"></strong></span>
+                        <span>Algoritmo: <strong id="secondaryAlgorithm"></strong></span>
+                    </div>
+                    <div class="ela-warning" id="elaWarning" style="display: none;">
+                        <strong>Nota:</strong> El análisis ELA no es confiable para imágenes PNG. 
+                        Se recomienda priorizar el resultado del algoritmo Laplaciano para este formato.
                     </div>
                 </div>
 
@@ -121,7 +172,7 @@
                 </div>
 
                 <div class="interpretation">
-                    <h3>▪ INTERPRETACIÓN TÉCNICA</h3>
+                    <h3>INTERPRETACIÓN TÉCNICA</h3>
                     <div id="interpretationText"></div>
                 </div>
             </div>
@@ -139,9 +190,9 @@
     <script>
         // Descripciones de algoritmos
         const algorithmDescriptions = {
-            'ela': 'Análisis de niveles de error por recompresión JPEG (Unidad 3: Operaciones aritméticas)',
-            'laplacian': 'Análisis de alta frecuencia mediante filtro Laplaciano 3x3 (Unidad 3: Filtros de vecindad)',
-            'combined': 'Combinación ponderada de múltiples métricas para mayor robustez'
+            'auto': 'Selección automática: JPEG utiliza ELA, otros formatos utilizan Laplaciano',
+            'ela': 'Análisis de niveles de error por recompresión JPEG (óptimo para archivos JPEG)',
+            'laplacian': 'Análisis de alta frecuencia mediante filtro Laplaciano 3x3 (óptimo para PNG y otros formatos)'
         };
 
         // Actualizar descripción cuando cambia el algoritmo
@@ -149,10 +200,27 @@
             document.getElementById('algorithmDesc').textContent = algorithmDescriptions[e.target.value] || '';
         });
 
-        // Mostrar nombre del archivo seleccionado
+        // Mostrar nombre del archivo seleccionado y vista previa
         document.getElementById('imageInput').addEventListener('change', function(e) {
-            const fileName = e.target.files[0]?.name || 'Seleccionar archivo de imagen...';
+            const file = e.target.files[0];
+            const fileName = file?.name || 'Seleccionar archivo de imagen...';
             document.getElementById('fileName').textContent = fileName;
+            
+            // Mostrar vista previa comprimida
+            const previewContainer = document.getElementById('imagePreviewContainer');
+            const previewImg = document.getElementById('imagePreview');
+            
+            if (file && file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    previewImg.src = event.target.result;
+                    previewContainer.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            } else {
+                previewContainer.style.display = 'none';
+                previewImg.src = '';
+            }
         });
 
         // Manejo del formulario
@@ -208,7 +276,7 @@
                 reader.readAsDataURL(fileInput.files[0]);
             }
             
-            // Predicción
+            // Predicción principal
             const predictionLabel = document.getElementById('predictionLabel');
             predictionLabel.textContent = data.prediction;
             predictionLabel.className = 'prediction-label ' + 
@@ -216,9 +284,44 @@
             
             document.getElementById('confidence').textContent = data.confidence + '%';
             
-            // Algoritmo usado
-            const algoInfo = data.algorithm_info || {};
-            document.getElementById('algorithmUsed').textContent = algoInfo.name || data.algorithm_used;
+            // Algoritmo usado (primario)
+            const primaryResult = data.primary_result || {};
+            document.getElementById('algorithmUsed').textContent = primaryResult.algorithm_name || data.algorithm_used;
+            
+            // Información de formato
+            const formatInfo = document.getElementById('formatInfo');
+            
+            if (data.format_info) {
+                formatInfo.style.display = 'block';
+                const formatType = data.format_info.detected_type || data.format_info.extension;
+                const isJpeg = data.format_info.is_jpeg ? ' (JPEG)' : '';
+                document.getElementById('detectedFormat').textContent = formatType.toUpperCase() + isJpeg;
+            } else {
+                formatInfo.style.display = 'none';
+            }
+            
+            // Resultado secundario
+            const secondaryResult = data.secondary_result || {};
+            if (secondaryResult.prediction) {
+                const secondaryPrediction = document.getElementById('secondaryPrediction');
+                secondaryPrediction.textContent = secondaryResult.prediction;
+                secondaryPrediction.className = 'secondary-prediction ' + 
+                    (secondaryResult.prediction === 'REAL' ? 'real' : 'ai');
+                
+                document.getElementById('secondaryConfidence').textContent = secondaryResult.confidence + '%';
+                document.getElementById('secondaryAlgorithm').textContent = secondaryResult.algorithm_name || secondaryResult.algorithm;
+                document.getElementById('secondaryResult').style.display = 'block';
+            } else {
+                document.getElementById('secondaryResult').style.display = 'none';
+            }
+            
+            // Advertencia ELA para PNG
+            const elaWarning = document.getElementById('elaWarning');
+            if (data.ela_warning) {
+                elaWarning.style.display = 'block';
+            } else {
+                elaWarning.style.display = 'none';
+            }
             
             // Métricas
             document.getElementById('laplacianScore').textContent = data.laplacian_score;
@@ -259,48 +362,53 @@
 
         function generateInterpretation(data) {
             let html = '<ul>';
-            const algo = data.algorithm_used || 'laplacian';
-            const algoName = data.algorithm_info?.name || algo.toUpperCase();
+            const primary = data.primary_result || {};
+            const secondary = data.secondary_result || {};
+            const primaryAlgo = primary.algorithm || 'laplacian';
+            const primaryName = primary.algorithm_name || primaryAlgo.toUpperCase();
             
-            html += '<li><strong>Algoritmo utilizado:</strong> ' + algoName + '</li>';
+            // Información del análisis dual
+            html += '<li><strong>Análisis dual ejecutado:</strong> Se evaluaron ambos algoritmos (ELA y Laplaciano) sobre la imagen.</li>';
+            html += '<li><strong>Algoritmo primario seleccionado:</strong> ' + primaryName + ' (mayor confianza: ' + data.confidence + '%)</li>';
             
-            if (algo === 'ela' && data.ela_mean !== undefined) {
+            // Interpretación según algoritmo primario
+            if (primaryAlgo === 'ela' && data.ela_mean !== undefined) {
                 if (data.prediction === 'REAL') {
-                    html += '<li><strong>Score ELA alto (' + data.ela_mean + ')</strong>: ';
+                    html += '<li><strong>Score ELA (' + data.ela_mean + ')</strong>: ';
                     html += 'La imagen presenta niveles de error consistentes con una fotografía real que ha sido comprimida previamente.</li>';
-                    html += '<li>Las regiones muestran patrones de compresión uniformes, típico de imágenes capturadas por cámaras digitales.</li>';
                 } else {
-                    html += '<li><strong>Score ELA bajo (' + data.ela_mean + ')</strong>: ';
+                    html += '<li><strong>Score ELA (' + data.ela_mean + ')</strong>: ';
                     html += 'La imagen presenta niveles de error inusualmente bajos o uniformes, característica de imágenes sintéticas.</li>';
-                    html += '<li>Las imágenes generadas por IA suelen no tener historial de compresión JPEG previo, resultando en patrones ELA distintos.</li>';
                 }
-            } else if (algo === 'laplacian') {
+            } else if (primaryAlgo === 'laplacian') {
                 if (data.prediction === 'REAL') {
-                    html += '<li><strong>Score Laplaciano bajo (' + data.laplacian_score + ')</strong>: ';
+                    html += '<li><strong>Score Laplaciano (' + data.laplacian_score + ')</strong>: ';
                     html += 'La imagen presenta menor contenido de alta frecuencia, característica típica de imágenes naturales.</li>';
                 } else {
-                    html += '<li><strong>Score Laplaciano elevado (' + data.laplacian_score + ')</strong>: ';
+                    html += '<li><strong>Score Laplaciano (' + data.laplacian_score + ')</strong>: ';
                     html += 'Detección de artefactos característicos de síntesis por inteligencia artificial.</li>';
                 }
-            } else if (algo === 'combined') {
-                html += '<li><strong>Votación combinada:</strong> Se analizaron múltiples métricas para mayor robustez.</li>';
-                if (data.algorithm_details?.votes) {
-                    const votes = data.algorithm_details.votes;
-                    for (const [name, info] of Object.entries(votes)) {
-                        const voteText = info.vote === 1 ? 'IA' : 'REAL';
-                        html += '<li>' + name.toUpperCase() + ': vota ' + voteText + ' (confianza: ' + info.conf + '%)</li>';
-                    }
+            }
+            
+            // Comparación con algoritmo secundario
+            if (secondary.prediction) {
+                const agree = primary.prediction === secondary.prediction;
+                if (agree) {
+                    html += '<li><strong>Consenso:</strong> Ambos algoritmos coinciden en la clasificación.</li>';
+                } else {
+                    html += '<li><strong>Discrepancia:</strong> El algoritmo secundario (' + (secondary.algorithm_name || secondary.algorithm) + ') clasificó como ' + secondary.prediction + ' con ' + secondary.confidence + '% de confianza.</li>';
                 }
             }
             
-            html += '<li>El espectro FFT y el análisis Laplaciano complementan el diagnóstico.</li>';
+            // Advertencia ELA si aplica
+            if (data.ela_warning) {
+                html += '<li><strong>Nota sobre ELA:</strong> El análisis ELA tiene menor confiabilidad en imágenes PNG ya que este formato no utiliza compresión JPEG.</li>';
+            }
+            
+            html += '<li>El espectro FFT complementa el diagnóstico mostrando la distribución de frecuencias.</li>';
             html += '</ul>';
             
-            const accuracy = data.algorithm_info?.accuracy;
-            if (accuracy) {
-                html += '<p class="note">◆ Algoritmo ' + algoName + ' con accuracy calibrada de ' + accuracy + '% sobre dataset de prueba.</p>';
-            }
-            html += '<p class="note">◆ Basado en técnicas de Procesamiento Digital de Imágenes clásico (Unidades 2, 3 y 4 del programa ICO 527)</p>';
+            html += '<p class="note">Basado en técnicas de Procesamiento Digital de Imágenes clásico (Unidades 2, 3 y 4 del programa ICO 527)</p>';
             
             return html;
         }
